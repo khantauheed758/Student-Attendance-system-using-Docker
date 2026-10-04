@@ -13,3 +13,4 @@ backups/
 .DS_Store
 *.tsbuildinfo
 .omnirush/
+.env*
