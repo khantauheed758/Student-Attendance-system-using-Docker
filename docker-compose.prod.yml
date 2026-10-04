@@ -1,0 +1,135 @@
+# Production stack for a single Docker host (EC2, Lightsail, or any VPS).
+#
+#   cp .env.production.example .env.production   # then edit, or:
+#   ./scripts/gen-env.sh attendly.example.com you@example.com
+#   ./scripts/deploy.sh
+#
+# It runs as its own Compose project ("attendly-prod") so it never touches the
+# development stack in docker-compose.yml, its containers, or its database
+# volume. Only Caddy publishes host ports; PostgreSQL and the API stay on the
+# private network.
+name: attendly-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    networks: [private]
+    logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: attendly/api:${RELEASE:-local}
+    build: {context: ./apps/api, target: runtime}
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+    command: ["npx", "prisma", "migrate", "deploy"]
+    depends_on: {db: {condition: service_healthy}}
+    networks: [private]
+    logging: *logging
+
+  api:
+    image: attendly/api:${RELEASE:-local}
+    build: {context: ./apps/api, target: runtime}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+      PORT: 4000
+      NODE_ENV: production
+      WEB_ORIGIN: ${WEB_ORIGIN:?set WEB_ORIGIN}
+      CSRF_SECRET: ${CSRF_SECRET:?set CSRF_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      # Caddy always overwrites the forwarding headers, so the API may trust
+      # exactly one hop for client IPs and rate limiting.
+      TRUST_PROXY: "1"
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    networks: [private]
+    logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    image: attendly/web:${RELEASE:-local}
+    build: {context: ./apps/web, target: runtime}
+    restart: unless-stopped
+    environment:
+      API_INTERNAL_URL: http://api:4000
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    depends_on: {api: {condition: service_healthy}}
+    networks: [private]
+    logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: {web: {condition: service_healthy}}
+    networks: [private]
+    logging: *logging
+    healthcheck:
+      # 127.0.0.1, not localhost: busybox wget resolves localhost to ::1 while
+      # Caddy's admin endpoint listens on IPv4 only.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # Administrative one-shot: create or promote a teacher account.
+  #   docker compose -f docker-compose.prod.yml --env-file .env.production \
+  #     --profile admin run --rm create-teacher
+  create-teacher:
+    profiles: [admin]
+    image: attendly/api:${RELEASE:-local}
+    build: {context: ./apps/api, target: runtime}
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+      TEACHER_NAME: ${TEACHER_NAME:-}
+      TEACHER_EMAIL: ${TEACHER_EMAIL:-}
+      TEACHER_PASSWORD: ${TEACHER_PASSWORD:-}
+    command: ["npx", "tsx", "prisma/create-teacher.ts"]
+    depends_on: {migrate: {condition: service_completed_successfully}}
+    networks: [private]
+    logging: *logging
+
+networks: {private: {driver: bridge}}
+volumes:
+  postgres_data: {}
+  caddy_data: {}
+  caddy_config: {}

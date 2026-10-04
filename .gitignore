@@ -1,0 +1,15 @@
+node_modules/
+.next/
+dist/
+.env
+# Production secrets and deployment state. .env.production.example is tracked;
+# the real file is generated per host by scripts/gen-env.sh.
+.env.production
+.deploy/
+backups/
+*.log
+# SSH private keys for the EC2 instance — never commit
+*.pem
+.DS_Store
+*.tsbuildinfo
+.omnirush/

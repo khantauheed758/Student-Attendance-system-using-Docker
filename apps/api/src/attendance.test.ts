@@ -1,0 +1,11 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { completed, eligible, effectiveStatus, stats, streak, dayStatus } from './attendance.js';
+const now = new Date('2026-01-01T10:30:00Z');
+const session = { startedAt:new Date('2026-01-01T10:00:00Z'), endsAt:new Date('2026-01-01T11:00:00Z'), closedAt:null };
+test('active missing records are not absences',()=>{assert.equal(effectiveStatus(session,undefined,now),'UNMARKED');assert.equal(completed(session,now),false)});
+test('completed and early-closed missing records are absent',()=>{assert.equal(effectiveStatus({...session,endsAt:now},undefined,now),'ABSENT');assert.equal(effectiveStatus({...session,closedAt:now},undefined,now),'ABSENT')});
+test('no retroactive eligibility',()=>{assert.equal(eligible(session,now),false);assert.equal(eligible(session,session.startedAt),true)});
+test('teacher decisions count only present; excused excluded',()=>{assert.deepEqual(stats(['PRESENT','EXCUSED','ABSENT']),{total:2,present:1,rate:50});assert.equal(stats(['EXCUSED']).rate,0)});
+test('streak skips excused and stops at absence',()=>{assert.equal(streak(['PRESENT','EXCUSED','PRESENT','ABSENT','PRESENT']),2)});
+test('calendar worst-status precedence',()=>{assert.equal(dayStatus(['PRESENT','ABSENT']),'ABSENT');assert.equal(dayStatus(['EXCUSED']),'EXCUSED')});

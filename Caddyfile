@@ -1,0 +1,33 @@
+# Production TLS front door.
+#
+# Caddy obtains and renews a Let's Encrypt certificate for $DOMAIN automatically
+# (HTTP-01 or TLS-ALPN), redirects every HTTP request to HTTPS, and is the only
+# container that publishes host ports. Renewal needs no cron job.
+#
+# DOMAIN=localhost issues an internal, self-signed certificate instead, which is
+# what the local smoke test in DEPLOYMENT.md uses.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		# Six months. Safe because Caddy only ever serves this site over TLS and
+		# always redirects plain HTTP first.
+		Strict-Transport-Security "max-age=15552000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Plain-text liveness endpoint for external uptime monitors.
+	respond /healthz "ok" 200
+
+	# Everything else is Next.js, which proxies /api/* to the Express service.
+	reverse_proxy web:3000 {
+		header_up X-Real-IP {remote_host}
+	}
+}

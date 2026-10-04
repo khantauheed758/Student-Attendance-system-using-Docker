@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+enum Role {
+  TEACHER
+  STUDENT
+}
+enum Status {
+  PRESENT
+  LATE
+  ABSENT
+  EXCUSED
+}
+enum PostKind {
+  NOTICE
+  MATERIAL
+}
+model User {
+  id String @id @default(cuid())
+  name String
+  email String @unique
+  /// Permanent Registration Number. Unique per student; null for teachers and for
+  /// students who signed up before PRN was required.
+  prn String? @unique
+  /// Profile photo stored inline as a data URL. The browser crops and compresses
+  /// it before upload, so no object storage is needed and the photo survives
+  /// container restarts. Null means "render initials".
+  avatar String?
+  password String
+  role Role @default(STUDENT)
+  courses Course[]
+  enrollments Enrollment[]
+  attendance Attendance[]
+  sessions LoginSession[]
+  audits Audit[]
+  posts Post[]
+}
+model LoginSession {
+  hash String @id
+  userId String
+  expiresAt DateTime
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  @@index([expiresAt])
+}
+model Course {
+  id String @id @default(cuid())
+  name String
+  code String
+  color String @default("#8b5cf6")
+  joinCode String @unique
+  teacherId String
+  teacher User @relation(fields:[teacherId], references:[id])
+  enrollments Enrollment[]
+  sessions ClassSession[]
+  posts Post[]
+  @@unique([teacherId, code])
+}
+model Enrollment {
+  courseId String
+  studentId String
+  createdAt DateTime @default(now())
+  course Course @relation(fields:[courseId], references:[id])
+  student User @relation(fields:[studentId], references:[id])
+  @@id([courseId, studentId])
+}
+model ClassSession {
+  id String @id @default(cuid())
+  courseId String
+  title String
+  startedAt DateTime @default(now())
+  endsAt DateTime
+  closedAt DateTime?
+  lateAfterMinutes Int
+  course Course @relation(fields:[courseId], references:[id])
+  attendance Attendance[]
+  @@index([courseId, startedAt])
+}
+model Attendance {
+  id String @id @default(cuid())
+  sessionId String
+  studentId String
+  status Status
+  source String
+  checkedInAt DateTime?
+  session ClassSession @relation(fields:[sessionId], references:[id])
+  student User @relation(fields:[studentId], references:[id])
+  @@unique([sessionId, studentId])
+}
+model Audit {
+  id String @id @default(cuid())
+  actorId String
+  sessionId String
+  studentId String
+  before String?
+  after Status
+  reason String
+  createdAt DateTime @default(now())
+  actor User @relation(fields:[actorId], references:[id])
+}
+model Post {
+  id String @id @default(cuid())
+  courseId String
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  authorId String
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  kind PostKind @default(NOTICE)
+  title String
+  body String
+  url String?
+  pinned Boolean @default(false)
+  createdAt DateTime @default(now())
+  @@index([courseId, pinned, createdAt])
+}
